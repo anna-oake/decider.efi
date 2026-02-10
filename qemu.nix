@@ -153,6 +153,7 @@ rec {
     {
       type = "app";
       program = "${qemuScript}/bin/decider-qemu-${targetArch}";
+      qemuScript = qemuScript;
       meta.description = "Run decider QEMU harness for ${targetArch} guest";
     };
 }

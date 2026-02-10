@@ -68,11 +68,6 @@
           decider = mkDecider hostArch;
           default = mkDecider hostArch;
         };
-      in
-      {
-        checks = packages;
-
-        packages = packages;
 
         apps =
           let
@@ -87,6 +82,25 @@
             qemu = qemu.mkQemuApp hostArch qemuSettings;
             default = qemu.mkQemuApp hostArch qemuSettings;
           };
+      in
+      {
+        checks =
+          let
+            packageChecks = removeAttrs packages [
+              "default"
+              "decider"
+            ];
+            appChecks = pkgs.lib.mapAttrs (_: app: app.qemuScript) (
+              removeAttrs apps [
+                "default"
+                "qemu"
+              ]
+            );
+          in
+          packageChecks // appChecks;
+
+        packages = packages;
+        apps = apps;
       }
     );
 }
