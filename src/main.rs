@@ -19,7 +19,7 @@ use uefi::runtime::{VariableAttributes, VariableVendor};
 use uefi::{boot, guid, runtime, CString16};
 
 const CONFIG_PATH: &str = "\\decider\\decider.conf";
-const CHOICE_PATH: &str = "\\decider.choice";
+const CHOICE_PATH: &str = "\\DECIDER.CHO";
 const DEFAULT_ENTRIES_PATH: &str = "\\loader\\entries";
 const ONESHOT_VAR_NAME: &str = "LoaderEntryOneShot";
 const SYSTEMD_BOOT_LOADER_GUID: uefi::Guid = guid!("4a67b082-0a4c-41cf-b6c7-440b29bb8c4f");

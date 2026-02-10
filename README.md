@@ -5,7 +5,7 @@ catcoded and less cursed solution of the same problem for grub: [eule-booter](ht
 1. install systemd-boot
 2. install decider.efi
 3. set decider.efi as default boot option
-4. you can now set `LoaderEntryOneShot` on boot using a removable flash drive with decider.choice in its root
+4. you can now set `LoaderEntryOneShot` on boot using a removable flash drive with DECIDER.CHO in its root
 
 hint: the removable flash drive should be an esp32/rp2040 pretending to be a usb drive and serving the right file depending on some physical toggle state or whatever
 

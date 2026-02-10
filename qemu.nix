@@ -91,7 +91,7 @@ rec {
     mkFatImage "usb.img" (
       pkgs.writeTextFile {
         name = "decider-usb-root-${targetArch}";
-        destination = "/decider.choice";
+        destination = "/DECIDER.CHO";
         text = ''
           mode=${mode}
           entry=${entry}
