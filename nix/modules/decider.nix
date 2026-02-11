@@ -41,6 +41,8 @@ let
 
   deciderConfig = pkgs.writeText "decider.conf" ''
     chainload_path=${cfg.chainloadPath}
+    choice_source=${cfg.choiceSource}
+    ${lib.optionalString (cfg.choiceSource == "tftp") "tftp_ip=${cfg.tftpIp}"}
   '';
 
   updateEfiBootEntry = pkgs.writeShellScript "decider-update-efi-boot-entry" ''
@@ -173,6 +175,26 @@ in
       '';
     };
 
+    choiceSource = lib.mkOption {
+      type = lib.types.enum [
+        "fs"
+        "tftp"
+      ];
+      default = "fs";
+      description = ''
+        Source used to retrieve DECIDER.CHO choice data.
+      '';
+    };
+
+    tftpIp = lib.mkOption {
+      type = lib.types.nullOr lib.types.str;
+      default = null;
+      example = "10.10.0.2";
+      description = ''
+        TFTP server IP (IPv4 or IPv6) used when `choiceSource = "tftp"`.
+      '';
+    };
+
     efiInstallAsRemovable = lib.mkOption {
       type = lib.types.bool;
       default = !efi.canTouchEfiVariables;
@@ -191,6 +213,10 @@ in
           {
             assertion = systemdBootEnabled || lanzabooteEnabled;
             message = "boot.loader.decider.enable requires either boot.loader.systemd-boot.enable or boot.lanzaboote.enable.";
+          }
+          {
+            assertion = (cfg.choiceSource != "tftp") || (cfg.tftpIp != null);
+            message = "boot.loader.decider.tftpIp must be set when boot.loader.decider.choiceSource = \"tftp\".";
           }
         ];
       }

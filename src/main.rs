@@ -5,13 +5,18 @@ extern crate alloc;
 
 mod helpers;
 mod config;
+mod fs;
 mod nixos;
+mod tftp;
 
 use alloc::vec::Vec;
-use config::{find_choice, load_config, Choice};
+use alloc::string::String;
+use config::{Choice, ChoiceSource, load_config};
+use fs::find_fs_choice;
 use helpers::*;
 use log::{error, info, warn};
 use nixos::find_latest_nixos_entry;
+use tftp::find_tftp_choice;
 use uefi::prelude::*;
 use uefi::proto::device_path::build::{media, DevicePathBuilder};
 use uefi::proto::device_path::DevicePath;
@@ -41,28 +46,20 @@ fn main() -> Status {
 fn run(image_handle: Handle) -> Result<(), Status> {
     let config = load_config(image_handle)?;
     connect_all_controllers();
-    info!("scanning filesystems...");
 
-    let resolved_entry = match find_choice(image_handle) {
-        Ok(Choice::Entry(entry_id)) => {
-            info!("parsed entry id: {}", entry_id);
-            Some(entry_id)
+    let choice_result = match config.choice_source {
+        ChoiceSource::Fs => {
+            info!("choice source: fs");
+            find_fs_choice(image_handle)
         }
-        Ok(Choice::NixosCurrent) => match find_latest_nixos_entry(image_handle) {
-            Ok(entry_id) => {
-                info!("resolved nixos-current to entry id: {}", entry_id);
-                Some(entry_id)
-            }
-            Err(err) => {
-                warn!("failed to resolve nixos-current ({:?}); skipping variable set", err);
-                None
-            }
-        }
-        Err(err) => {
-            warn!("choice lookup failed ({:?}); skipping variable set", err);
-            None
+        ChoiceSource::Tftp => {
+            let tftp_ip = config.tftp_ip.as_deref().ok_or(Status::LOAD_ERROR)?;
+            info!("choice source: tftp ({})", tftp_ip);
+            find_tftp_choice(tftp_ip)
         }
     };
+
+    let resolved_entry = resolve_choice_to_entry_id(image_handle, choice_result);
 
     if let Some(entry_id) = resolved_entry {
         match set_oneshot_variable(&entry_id) {
@@ -91,6 +88,29 @@ fn connect_all_controllers() {
                 Status::ALREADY_STARTED | Status::NOT_FOUND | Status::ACCESS_DENIED | Status::UNSUPPORTED => {}
                 status => warn!("connect_controller failed ({:?})", status),
             }
+        }
+    }
+}
+
+fn resolve_choice_to_entry_id(image_handle: Handle, choice_result: Result<Choice, Status>) -> Option<String> {
+    match choice_result {
+        Ok(Choice::Entry(entry_id)) => {
+            info!("parsed entry id: {}", entry_id);
+            Some(entry_id)
+        }
+        Ok(Choice::NixosCurrent) => match find_latest_nixos_entry(image_handle) {
+            Ok(entry_id) => {
+                info!("resolved nixos-current to entry id: {}", entry_id);
+                Some(entry_id)
+            }
+            Err(err) => {
+                warn!("failed to resolve nixos-current ({:?}); skipping variable set", err);
+                None
+            }
+        },
+        Err(err) => {
+            warn!("choice lookup failed ({:?}); skipping variable set", err);
+            None
         }
     }
 }

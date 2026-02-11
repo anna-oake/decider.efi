@@ -5,6 +5,8 @@ use uefi::proto::media::file::{File, FileAttribute, FileHandle, FileMode, FileTy
 use uefi::proto::media::fs::SimpleFileSystem;
 use uefi::{CString16, Status};
 
+use crate::config::Choice;
+
 pub fn normalize_uefi_path(path: &str) -> String {
     path.chars()
         .map(|c| if c == '/' { '\\' } else { c })
@@ -93,4 +95,24 @@ pub fn get_required_value<'a>(kv: &'a [(String, String)], key: &str) -> Result<&
         }
     }
     Err(Status::LOAD_ERROR)
+}
+
+pub fn get_optional_value<'a>(kv: &'a [(String, String)], key: &str) -> Option<&'a str> {
+    for (k, v) in kv {
+        if k == key {
+            return Some(v.as_str());
+        }
+    }
+    None
+}
+
+pub fn parse_choice(text: &str) -> Result<Choice, Status> {
+    let kv = parse_key_values(text);
+    let choice_type = get_required_value(&kv, "choice_type")?;
+
+    match choice_type {
+        "entry_id" => Ok(Choice::Entry(get_required_value(&kv, "entry_id")?.to_owned())),
+        "nixos-current" => Ok(Choice::NixosCurrent),
+        _ => Err(Status::LOAD_ERROR),
+    }
 }

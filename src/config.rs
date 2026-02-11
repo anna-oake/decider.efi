@@ -1,27 +1,32 @@
-use alloc::borrow::ToOwned;
 use alloc::string::String;
-use log::{info, warn};
+use alloc::borrow::ToOwned;
+use log::info;
 use uefi::prelude::*;
-use uefi::proto::loaded_image::LoadedImage;
-use uefi::proto::media::fs::SimpleFileSystem;
 use uefi::boot;
 
 use crate::helpers::{
-    get_required_value, normalize_uefi_path, parse_key_values, read_text_file,
+    get_optional_value, get_required_value, normalize_uefi_path, parse_key_values, read_text_file,
 };
 
 pub const CONFIG_PATH: &str = "\\decider\\decider.conf";
-const CHOICE_PATH: &str = "\\DECIDER.CHO";
 
 #[derive(Debug)]
 pub struct Config {
     pub chainload_path: String,
+    pub choice_source: ChoiceSource,
+    pub tftp_ip: Option<String>,
 }
 
 #[derive(Debug)]
 pub enum Choice {
     Entry(String),
     NixosCurrent,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ChoiceSource {
+    Fs,
+    Tftp,
 }
 
 pub fn load_config(image_handle: Handle) -> Result<Config, Status> {
@@ -31,56 +36,23 @@ pub fn load_config(image_handle: Handle) -> Result<Config, Status> {
     parse_config(&text)
 }
 
-pub fn find_choice(image_handle: Handle) -> Result<Choice, Status> {
-    let source_device = boot::open_protocol_exclusive::<LoadedImage>(image_handle)
-        .ok()
-        .and_then(|img| img.device());
-
-    let handles = boot::find_handles::<SimpleFileSystem>().map_err(|e| e.status())?;
-    info!("discovered {} filesystem handles", handles.len());
-
-    for (idx, handle) in handles.into_iter().enumerate() {
-        if source_device == Some(handle) {
-            continue;
-        }
-
-        let mut fs = match boot::open_protocol_exclusive::<SimpleFileSystem>(handle) {
-            Ok(fs) => fs,
-            Err(err) => {
-                warn!("skipping fs #{} (open failed: {:?})", idx, err.status());
-                continue;
-            }
-        };
-
-        let marker_text = match read_text_file(&mut fs, CHOICE_PATH) {
-            Ok(text) => text,
-            Err(Status::NOT_FOUND) => continue,
-            Err(err) => {
-                warn!("skipping fs #{} (read failed: {:?})", idx, err);
-                continue;
-            }
-        };
-
-        info!("found choice file on fs #{}", idx);
-        return parse_choice(&marker_text);
-    }
-
-    Err(Status::NOT_FOUND)
-}
-
 fn parse_config(text: &str) -> Result<Config, Status> {
     let kv = parse_key_values(text);
     let chainload_path = normalize_uefi_path(get_required_value(&kv, "chainload_path")?);
-    Ok(Config { chainload_path })
-}
+    let choice_source = match get_optional_value(&kv, "choice_source").unwrap_or("fs") {
+        "fs" => ChoiceSource::Fs,
+        "tftp" => ChoiceSource::Tftp,
+        _ => return Err(Status::LOAD_ERROR),
+    };
+    let tftp_ip = get_optional_value(&kv, "tftp_ip").map(ToOwned::to_owned);
 
-fn parse_choice(text: &str) -> Result<Choice, Status> {
-    let kv = parse_key_values(text);
-    let choice_type = get_required_value(&kv, "choice_type")?;
-
-    match choice_type {
-        "entry_id" => Ok(Choice::Entry(get_required_value(&kv, "entry_id")?.to_owned())),
-        "nixos-current" => Ok(Choice::NixosCurrent),
-        _ => Err(Status::LOAD_ERROR),
+    if choice_source == ChoiceSource::Tftp && tftp_ip.is_none() {
+        return Err(Status::LOAD_ERROR);
     }
+
+    Ok(Config {
+        chainload_path,
+        choice_source,
+        tftp_ip,
+    })
 }
