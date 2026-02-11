@@ -54,6 +54,7 @@ fn main() -> Status {
 fn run(image_handle: Handle) -> Result<(), Status> {
     let config = load_config(image_handle)?;
     info!("loaded config from {}", CONFIG_PATH);
+    connect_all_controllers();
     info!("scanning filesystems...");
 
     let resolved_entry = match find_choice(image_handle) {
@@ -89,6 +90,25 @@ fn run(image_handle: Handle) -> Result<(), Status> {
     Ok(())
 }
 
+fn connect_all_controllers() {
+    let handles = match boot::locate_handle_buffer(boot::SearchType::AllHandles) {
+        Ok(handles) => handles,
+        Err(err) => {
+            warn!("failed to list handles for connect_controller ({:?})", err.status());
+            return;
+        }
+    };
+
+    for &handle in handles.iter() {
+        if let Err(err) = boot::connect_controller(handle, None, None, true) {
+            match err.status() {
+                Status::ALREADY_STARTED | Status::NOT_FOUND | Status::ACCESS_DENIED | Status::UNSUPPORTED => {}
+                status => warn!("connect_controller failed ({:?})", status),
+            }
+        }
+    }
+}
+
 fn load_config(image_handle: Handle) -> Result<Config, Status> {
     let mut esp_fs = boot::get_image_file_system(image_handle).map_err(|e| e.status())?;
     let text = read_text_file(&mut esp_fs, CONFIG_PATH)?;
@@ -101,6 +121,7 @@ fn find_choice(image_handle: Handle) -> Result<Choice, Status> {
         .and_then(|img| img.device());
 
     let handles = boot::find_handles::<SimpleFileSystem>().map_err(|e| e.status())?;
+    info!("discovered {} filesystem handles", handles.len());
 
     for (idx, handle) in handles.into_iter().enumerate() {
         if source_device == Some(handle) {
@@ -243,10 +264,10 @@ fn read_binary_file(fs: &mut SimpleFileSystem, path: &str) -> Result<Vec<u8>, St
 
 fn parse_config(text: &str) -> Result<Config, Status> {
     let kv = parse_key_values(text);
-    let chainload_path = get_required_value(&kv, "chainload_path")?.to_owned();
-    let entries_path = get_optional_value(&kv, "entries_path")
-        .unwrap_or(DEFAULT_ENTRIES_PATH)
-        .to_owned();
+    let chainload_path = normalize_uefi_path(get_required_value(&kv, "chainload_path")?);
+    let entries_path = normalize_uefi_path(
+        get_optional_value(&kv, "entries_path").unwrap_or(DEFAULT_ENTRIES_PATH),
+    );
     Ok(Config {
         chainload_path,
         entries_path,
@@ -322,6 +343,12 @@ fn parse_nixos_generation_name(name: &str) -> Option<(u64, String)> {
     let generation = number.parse::<u64>().ok()?;
     let entry_id = name[..name.len() - SUFFIX.len()].to_owned();
     Some((generation, entry_id))
+}
+
+fn normalize_uefi_path(path: &str) -> String {
+    path.chars()
+        .map(|c| if c == '/' { '\\' } else { c })
+        .collect()
 }
 
 fn to_cstring16(s: &str) -> Result<CString16, Status> {

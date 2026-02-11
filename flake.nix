@@ -17,90 +17,114 @@
       crane,
       rust-overlay,
     }:
-    flake-utils.lib.eachDefaultSystem (
-      system:
-      let
-        pkgs = import nixpkgs {
-          inherit system;
-          overlays = [ (import rust-overlay) ];
-        };
+    let
+      rustOverlay = import rust-overlay;
 
-        hostArch = pkgs.stdenv.hostPlatform.qemuArch;
-        toolchain = pkgs.rust-bin.fromRustupToolchainFile ./rust-toolchain.toml;
-        craneLib = (crane.mkLib pkgs).overrideToolchain toolchain;
-
-        mkDecider =
-          targetArch:
-          craneLib.buildPackage {
-            pname = "decider";
-            version = "0.0.1";
-
-            src = craneLib.cleanCargoSource ./.;
-
-            doCheck = false;
-            CARGO_BUILD_TARGET = "${targetArch}-unknown-uefi";
-
-            # Workaround for crane dependency builds on no_std/no_main UEFI crates.
-            dummyrs = pkgs.writeText "dummy.rs" ''
-              #![allow(unused)]
-              #![cfg_attr(any(target_os = "none", target_os = "uefi"), no_std, no_main)]
-
-              #[cfg_attr(any(target_os = "none", target_os = "uefi"), panic_handler)]
-              fn panic(_info: &::core::panic::PanicInfo<'_>) -> ! {
-                loop {}
-              }
-
-              #[cfg_attr(any(target_os = "none", target_os = "uefi"), unsafe(export_name = "efi_main"))]
-              fn main() {}
-            '';
+      perSystem = flake-utils.lib.eachDefaultSystem (
+        system:
+        let
+          pkgs = import nixpkgs {
+            inherit system;
+            overlays = [ rustOverlay ];
           };
-        qemu = import ./qemu.nix {
-          inherit
-            pkgs
-            nixpkgs
-            mkDecider
-            ;
-        };
 
-        packages = {
-          decider-x86_64 = mkDecider "x86_64";
-          decider-aarch64 = mkDecider "aarch64";
-          decider = mkDecider hostArch;
-          default = mkDecider hostArch;
-        };
+          hostArch = pkgs.stdenv.hostPlatform.qemuArch;
+          toolchain = pkgs.rust-bin.fromRustupToolchainFile ./rust-toolchain.toml;
+          craneLib = (crane.mkLib pkgs).overrideToolchain toolchain;
 
-        apps =
-          let
-            qemuSettings = {
-              mode = "entry";
-              entry = "auto-reboot-to-firmware-setup";
+          mkDecider =
+            targetArch:
+            craneLib.buildPackage {
+              pname = "decider-efi";
+              version = "0.0.1";
+
+              src = craneLib.cleanCargoSource ./.;
+
+              doCheck = false;
+              CARGO_BUILD_TARGET = "${targetArch}-unknown-uefi";
+
+              # Workaround for crane dependency builds on no_std/no_main UEFI crates.
+              dummyrs = pkgs.writeText "dummy.rs" ''
+                #![allow(unused)]
+                #![cfg_attr(any(target_os = "none", target_os = "uefi"), no_std, no_main)]
+
+                #[cfg_attr(any(target_os = "none", target_os = "uefi"), panic_handler)]
+                fn panic(_info: &::core::panic::PanicInfo<'_>) -> ! {
+                  loop {}
+                }
+
+                #[cfg_attr(any(target_os = "none", target_os = "uefi"), unsafe(export_name = "efi_main"))]
+                fn main() {}
+              '';
             };
-          in
-          {
-            qemu-x86_64 = qemu.mkQemuApp "x86_64" qemuSettings;
-            qemu-aarch64 = qemu.mkQemuApp "aarch64" qemuSettings;
-            qemu = qemu.mkQemuApp hostArch qemuSettings;
-            default = qemu.mkQemuApp hostArch qemuSettings;
-          };
-      in
-      {
-        checks =
-          let
-            packageChecks = removeAttrs packages [
-              "default"
-              "decider"
-            ];
-            appChecks = pkgs.lib.mapAttrs (_: app: app.qemuScript) (
-              removeAttrs apps [
-                "default"
-                "qemu"
-              ]
-            );
-          in
-          packageChecks // appChecks;
 
-        packages = packages;
-        apps = apps;
-      }
-    );
+          qemu = import ./qemu.nix {
+            inherit
+              pkgs
+              nixpkgs
+              mkDecider
+              ;
+          };
+
+          packages = {
+            decider-efi-x86_64 = mkDecider "x86_64";
+            decider-efi-aarch64 = mkDecider "aarch64";
+            decider-efi = mkDecider hostArch;
+            default = mkDecider hostArch;
+          };
+
+          apps =
+            let
+              qemuSettings = {
+                mode = "entry";
+                entry = "auto-reboot-to-firmware-setup";
+              };
+            in
+            {
+              qemu-x86_64 = qemu.mkQemuApp "x86_64" qemuSettings;
+              qemu-aarch64 = qemu.mkQemuApp "aarch64" qemuSettings;
+              qemu = qemu.mkQemuApp hostArch qemuSettings;
+              default = qemu.mkQemuApp hostArch qemuSettings;
+            };
+        in
+        {
+          checks =
+            let
+              packageChecks = removeAttrs packages [
+                "default"
+                "decider-efi"
+              ];
+              appChecks = pkgs.lib.mapAttrs (_: app: app.qemuScript) (
+                removeAttrs apps [
+                  "default"
+                  "qemu"
+                ]
+              );
+              testChecks = pkgs.lib.mapAttrs' (name: value: pkgs.lib.nameValuePair "test-${name}" value) (
+                import ./nix/tests {
+                  inherit pkgs;
+                  deciderModule = self.nixosModules.decider;
+                }
+              );
+            in
+            packageChecks // appChecks // testChecks;
+
+          inherit packages apps;
+        }
+      );
+    in
+    perSystem
+    // {
+      nixosModules = {
+        decider =
+          args@{ pkgs, ... }:
+          import ./nix/modules/decider.nix (
+            args
+            // {
+              deciderPackage = self.packages.${pkgs.stdenv.hostPlatform.system}.decider-efi;
+            }
+          );
+        default = self.nixosModules.decider;
+      };
+    };
 }
