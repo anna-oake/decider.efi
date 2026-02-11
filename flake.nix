@@ -3,6 +3,10 @@
     nixpkgs.url = "github:NixOS/nixpkgs/nixpkgs-unstable";
     flake-utils.url = "github:numtide/flake-utils";
     crane.url = "github:ipetkov/crane";
+    lanzaboote = {
+      url = "github:nix-community/lanzaboote";
+      inputs.nixpkgs.follows = "nixpkgs";
+    };
     rust-overlay = {
       url = "github:oxalica/rust-overlay";
       inputs.nixpkgs.follows = "nixpkgs";
@@ -15,6 +19,7 @@
       nixpkgs,
       flake-utils,
       crane,
+      lanzaboote,
       rust-overlay,
     }:
     let
@@ -76,8 +81,8 @@
           apps =
             let
               qemuSettings = {
-                mode = "entry";
-                entry = "auto-reboot-to-firmware-setup";
+                choiceType = "entry_id";
+                entryId = "auto-reboot-to-firmware-setup";
               };
             in
             {
@@ -100,11 +105,14 @@
                   "qemu"
                 ]
               );
-              testChecks = pkgs.lib.mapAttrs' (name: value: pkgs.lib.nameValuePair "test-${name}" value) (
-                import ./nix/tests {
-                  inherit pkgs;
-                  deciderModule = self.nixosModules.decider;
-                }
+              testChecks = pkgs.lib.optionalAttrs pkgs.stdenv.hostPlatform.isLinux (
+                pkgs.lib.mapAttrs' (name: value: pkgs.lib.nameValuePair "test-${name}" value) (
+                  import ./nix/tests {
+                    inherit pkgs;
+                    deciderModule = self.nixosModules.decider;
+                    inherit lanzaboote;
+                  }
+                )
               );
             in
             packageChecks // appChecks // testChecks;

@@ -3,8 +3,8 @@
   dosfstools,
   mtools,
   util-linux,
-  mode ? "nixos-current",
-  entry ? "",
+  choiceType ? "nixos-current",
+  entryId ? "",
   ...
 }:
 runCommand "decider-choice-fat16.img"
@@ -34,8 +34,8 @@ runCommand "decider-choice-fat16.img"
     mkfs.vfat -F 16 --offset="$offset_sectors" "$img" >/dev/null
 
     cat > "$TMPDIR/DECIDER.CHO" <<'EOF'
-    mode=${mode}
-    entry=${entry}
+    choice_type=${choiceType}
+    entry_id=${entryId}
     EOF
 
     mcopy -i "$img@@$offset_bytes" "$TMPDIR/DECIDER.CHO" ::DECIDER.CHO

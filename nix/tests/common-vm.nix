@@ -11,14 +11,14 @@
   ];
 
   options.deciderTest.choiceImage = {
-    mode = lib.mkOption {
+    choiceType = lib.mkOption {
       type = lib.types.enum [
         "nixos-current"
-        "entry"
+        "entry_id"
       ];
       default = "nixos-current";
     };
-    entry = lib.mkOption {
+    entryId = lib.mkOption {
       type = lib.types.str;
       default = "";
     };
@@ -27,7 +27,8 @@
   config = {
     virtualisation.useBootLoader = true;
     virtualisation.useEFIBoot = true;
-    virtualisation.memorySize = 256;
+    virtualisation.cores = 4;
+    # virtualisation.memorySize = 256;
     virtualisation.graphics = false;
 
     boot.loader.timeout = 0;
@@ -37,8 +38,8 @@
     virtualisation.qemu.options = lib.mkAfter (
       let
         choiceImage = pkgs.callPackage ./choice-image.nix {
-          mode = config.deciderTest.choiceImage.mode;
-          entry = config.deciderTest.choiceImage.entry;
+          choiceType = config.deciderTest.choiceImage.choiceType;
+          entryId = config.deciderTest.choiceImage.entryId;
         };
       in
       [

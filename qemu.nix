@@ -38,7 +38,6 @@ rec {
       uefiBootFile = if targetArch == "aarch64" then "BOOTAA64.EFI" else "BOOTX64.EFI";
       deciderConf = pkgs.writeText "decider.conf" ''
         chainload_path=\EFI\systemd\${systemdBootEfiName}
-        entries_path=\loader\entries
       '';
       loaderConf = pkgs.writeText "loader.conf" ''
         timeout 1
@@ -85,16 +84,16 @@ rec {
   mkUsbImage =
     targetArch:
     {
-      mode,
-      entry,
+      choiceType,
+      entryId,
     }:
     mkFatImage "usb.img" (
       pkgs.writeTextFile {
         name = "decider-usb-root-${targetArch}";
         destination = "/DECIDER.CHO";
         text = ''
-          mode=${mode}
-          entry=${entry}
+          choice_type=${choiceType}
+          entry_id=${entryId}
         '';
       }
     );
@@ -102,8 +101,8 @@ rec {
   mkQemuApp =
     targetArch:
     {
-      mode ? "entry",
-      entry ? "auto-reboot-to-firmware-setup",
+      choiceType ? "entry_id",
+      entryId ? "auto-reboot-to-firmware-setup",
     }:
     let
       machineType = if targetArch == "aarch64" then "virt" else "pc";
@@ -111,7 +110,7 @@ rec {
       ovmfCode = "${pkgs.qemu}/share/qemu/edk2-${targetArch}-code.fd";
 
       espImage = mkEspImage targetArch;
-      usbImage = mkUsbImage targetArch { inherit mode entry; };
+      usbImage = mkUsbImage targetArch { inherit choiceType entryId; };
 
       qemuCommand = ''
         "${pkgs.qemu}/bin/qemu-system-${targetArch}" \
