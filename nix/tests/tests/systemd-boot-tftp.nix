@@ -1,5 +1,6 @@
 { pkgs, ... }:
 let
+  nicModel = if pkgs.stdenv.hostPlatform.isAarch64 then "virtio" else "e1000";
   tftpRoot = pkgs.runCommand "decider-tftp-root" { } ''
     mkdir -p "$out"
     cat > "$out/DECIDER.CHO" <<'EOF'
@@ -23,7 +24,7 @@ in
       virtualisation.vlans = lib.mkForce [ ];
 
       virtualisation.qemu.networkingOptions = lib.mkForce [
-        "-net nic,netdev=user.0,model=e1000"
+        "-net nic,netdev=user.0,model=${nicModel}"
         # bootfile here doesn't matter at all, but pxe in qemu doesn't work otherwise
         "-netdev user,id=user.0,tftp=${tftpRoot},bootfile=whatever"
       ];

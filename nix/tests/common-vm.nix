@@ -28,7 +28,6 @@
     virtualisation.useBootLoader = true;
     virtualisation.useEFIBoot = true;
     virtualisation.cores = 4;
-    # virtualisation.memorySize = 256;
     virtualisation.graphics = false;
 
     boot.loader.timeout = 0;

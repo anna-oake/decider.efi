@@ -15,7 +15,13 @@ pub fn find_tftp_choice(tftp_ip: &str) -> Result<Choice, Status> {
     let server_ip = parse_tftp_ip(tftp_ip)?;
     info!("tftp target server ip: {}", server_ip);
 
-    let handles = boot::find_handles::<BaseCode>().map_err(|e| e.status())?;
+    let handles = match boot::find_handles::<BaseCode>() {
+        Ok(handles) => handles,
+        Err(err) => {
+            warn!("failed to discover PXE BaseCode handles: {:?}", err.status());
+            return Err(err.status());
+        }
+    };
     info!("discovered {} PXE handles", handles.len());
     if handles.is_empty() {
         warn!("no PXE BaseCode handles found");
