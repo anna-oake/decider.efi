@@ -11,7 +11,7 @@ mod tftp;
 
 use alloc::vec::Vec;
 use alloc::string::String;
-use config::{Choice, ChoiceSource, load_config};
+use config::{Choice, ChoiceSource, Config, load_config};
 use fs::find_fs_choice;
 use helpers::*;
 use log::{error, info, warn};
@@ -47,24 +47,19 @@ fn run(image_handle: Handle) -> Result<(), Status> {
     let config = load_config(image_handle)?;
     connect_all_controllers();
 
-    let choice_result = match config.choice_source {
-        ChoiceSource::Fs => {
-            info!("choice source: fs");
-            find_fs_choice(image_handle)
+    match oneshot_variable_exists() {
+        Ok(true) => {
+            info!("{} already set; skipping choice lookup", ONESHOT_VAR_NAME);
         }
-        ChoiceSource::Tftp => {
-            let tftp_ip = config.tftp_ip.as_deref().ok_or(Status::LOAD_ERROR)?;
-            info!("choice source: tftp ({})", tftp_ip);
-            find_tftp_choice(tftp_ip)
+        Ok(false) => {
+            lookup_choice_and_set_oneshot(image_handle, &config)?;
         }
-    };
-
-    let resolved_entry = resolve_choice_to_entry_id(image_handle, choice_result);
-
-    if let Some(entry_id) = resolved_entry {
-        match set_oneshot_variable(&entry_id) {
-            Ok(()) => info!("set {} OK", ONESHOT_VAR_NAME),
-            Err(err) => warn!("failed to set {} ({:?})", ONESHOT_VAR_NAME, err),
+        Err(err) => {
+            warn!(
+                "failed to check {} ({:?}); continuing with choice lookup",
+                ONESHOT_VAR_NAME, err
+            );
+            lookup_choice_and_set_oneshot(image_handle, &config)?;
         }
     }
 
@@ -115,6 +110,31 @@ fn resolve_choice_to_entry_id(image_handle: Handle, choice_result: Result<Choice
     }
 }
 
+fn lookup_choice_and_set_oneshot(image_handle: Handle, config: &Config) -> Result<(), Status> {
+    let choice_result = match config.choice_source {
+        ChoiceSource::Fs => {
+            info!("choice source: fs");
+            find_fs_choice(image_handle)
+        }
+        ChoiceSource::Tftp => {
+            let tftp_ip = config.tftp_ip.as_deref().ok_or(Status::LOAD_ERROR)?;
+            info!("choice source: tftp ({})", tftp_ip);
+            find_tftp_choice(tftp_ip)
+        }
+    };
+
+    let resolved_entry = resolve_choice_to_entry_id(image_handle, choice_result);
+
+    if let Some(entry_id) = resolved_entry {
+        match set_oneshot_variable(&entry_id) {
+            Ok(()) => info!("set {} OK", ONESHOT_VAR_NAME),
+            Err(err) => warn!("failed to set {} ({:?})", ONESHOT_VAR_NAME, err),
+        }
+    }
+
+    Ok(())
+}
+
 fn set_oneshot_variable(entry_id: &str) -> Result<(), Status> {
     let var_name = to_cstring16(ONESHOT_VAR_NAME)?;
     let data = utf16_nul_terminated_bytes(entry_id);
@@ -123,6 +143,11 @@ fn set_oneshot_variable(entry_id: &str) -> Result<(), Status> {
 
     runtime::set_variable(var_name.as_ref(), &SYSTEMD_BOOT_LOADER_VENDOR, attrs, &data)
         .map_err(|e| e.status())
+}
+
+fn oneshot_variable_exists() -> Result<bool, Status> {
+    let var_name = to_cstring16(ONESHOT_VAR_NAME)?;
+    runtime::variable_exists(var_name.as_ref(), &SYSTEMD_BOOT_LOADER_VENDOR).map_err(|e| e.status())
 }
 
 fn chainload_next(image_handle: Handle, chainload_path: &str) -> Result<(), Status> {
