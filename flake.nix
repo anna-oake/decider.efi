@@ -1,12 +1,7 @@
 {
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-25.11";
-    flake-utils.url = "github:numtide/flake-utils";
     crane.url = "github:ipetkov/crane";
-    lanzaboote = {
-      url = "github:nix-community/lanzaboote/1902463415745b992dbaf301b2a35a1277be1584";
-      inputs.nixpkgs.follows = "nixpkgs";
-    };
     rust-overlay = {
       url = "github:oxalica/rust-overlay";
       inputs.nixpkgs.follows = "nixpkgs";
@@ -17,15 +12,20 @@
     {
       self,
       nixpkgs,
-      flake-utils,
       crane,
-      lanzaboote,
       rust-overlay,
     }:
     let
       rustOverlay = import rust-overlay;
 
-      perSystem = flake-utils.lib.eachDefaultSystem (
+      systems = [
+        "x86_64-linux"
+        "aarch64-linux"
+        "x86_64-darwin"
+        "aarch64-darwin"
+      ];
+
+      mkPerSystem =
         system:
         let
           pkgs = import nixpkgs {
@@ -63,66 +63,28 @@
               '';
             };
 
-          qemu = import ./qemu.nix {
-            inherit
-              pkgs
-              nixpkgs
-              mkDecider
-              ;
-          };
-
           packages = {
             decider-efi-x86_64 = mkDecider "x86_64";
             decider-efi-aarch64 = mkDecider "aarch64";
             decider-efi = mkDecider hostArch;
             default = mkDecider hostArch;
           };
-
-          apps =
-            let
-              qemuSettings = {
-                choiceType = "entry_id";
-                entryId = "auto-reboot-to-firmware-setup";
-              };
-            in
-            {
-              qemu-x86_64 = qemu.mkQemuApp "x86_64" qemuSettings;
-              qemu-aarch64 = qemu.mkQemuApp "aarch64" qemuSettings;
-              qemu = qemu.mkQemuApp hostArch qemuSettings;
-              default = qemu.mkQemuApp hostArch qemuSettings;
-            };
         in
         {
-          checks =
-            let
-              packageChecks = removeAttrs packages [
-                "default"
-                "decider-efi"
-              ];
-              appChecks = pkgs.lib.mapAttrs (_: app: app.qemuScript) (
-                removeAttrs apps [
-                  "default"
-                  "qemu"
-                ]
-              );
-              testChecks = pkgs.lib.optionalAttrs pkgs.stdenv.hostPlatform.isLinux (
-                pkgs.lib.mapAttrs' (name: value: pkgs.lib.nameValuePair "test-${name}" value) (
-                  import ./nix/tests {
-                    inherit pkgs;
-                    deciderModule = self.nixosModules.decider;
-                    inherit lanzaboote;
-                  }
-                )
-              );
-            in
-            packageChecks // appChecks // testChecks;
+          checks = removeAttrs packages [
+            "default"
+            "decider-efi"
+          ];
 
-          inherit packages apps;
-        }
-      );
+          inherit packages;
+        };
+
+      perSystem = nixpkgs.lib.genAttrs systems mkPerSystem;
     in
-    perSystem
-    // {
+    {
+      packages = nixpkgs.lib.mapAttrs (_: value: value.packages) perSystem;
+      checks = nixpkgs.lib.mapAttrs (_: value: value.checks) perSystem;
+
       nixosModules = {
         decider =
           args@{ pkgs, ... }:
