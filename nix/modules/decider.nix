@@ -28,11 +28,15 @@ let
   efiArch = pkgs.stdenv.hostPlatform.efiArch;
   deciderEfiName = "decider${efiArch}.efi";
   fallbackEfiName = "BOOT${lib.toUpper efiArch}.EFI";
+  chainloadPathLines = lib.mapAttrsToList (
+    name: path: "chainload_${name}_path=${path}"
+  ) cfg.chainloadPaths;
 
   deciderConfig = pkgs.writeText "decider.conf" ''
-    chainload_path=${cfg.chainloadPath}
+    chainload_systemd_path=${cfg.chainloadSystemdPath}
     choice_source=${cfg.choiceSource}
     ${lib.optionalString (cfg.choiceSource == "tftp") "tftp_ip=${cfg.tftpIp}"}
+    ${lib.concatStringsSep "\n" chainloadPathLines}
   '';
 
   updateEfiBootEntry = pkgs.writeShellApplication {
@@ -152,12 +156,37 @@ in
       '';
     };
 
-    chainloadPath = lib.mkOption {
+    chainloadSystemdPath = lib.mkOption {
       type = lib.types.str;
       default = "/EFI/systemd/systemd-boot${efiArch}.efi";
       defaultText = lib.literalExpression ''"\\EFI\\systemd\\systemd-boot''${pkgs.stdenv.hostPlatform.efiArch}.efi"'';
       description = ''
         UEFI path that decider will chainload after setting LoaderEntryOneShot.
+        Supports plain paths like `\EFI\systemd\systemd-bootx64.efi` (from the
+        current boot device) and prefixed paths like
+        `ce6a9709-944e-4496-9363-1706dac399ee:/EFI/...` to select a GPT partition
+        by GUID.
+      '';
+    };
+
+    chainloadPaths = lib.mkOption {
+      type = lib.types.attrsOf lib.types.str;
+      default = { };
+      example = lib.literalExpression ''
+        {
+          windows = "ce6a9709-944e-4496-9363-1706dac399ee:/EFI/Microsoft/Boot/bootmgfw.efi";
+        }
+      '';
+      description = ''
+        Additional chainload path mappings rendered to {file}`decider.conf` as
+        `chainload_<name>_path=<value>`.
+
+        For example, setting
+        `chainloadPaths.windows = "ce6a9709-944e-4496-9363-1706dac399ee:/EFI/..."`
+        emits
+        `chainload_windows_path=ce6a9709-944e-4496-9363-1706dac399ee:/EFI/...`,
+        which can be selected via
+        `choice_type=chainload_windows` in {file}`DECIDER.CHO`.
       '';
     };
 

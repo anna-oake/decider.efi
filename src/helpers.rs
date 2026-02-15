@@ -113,6 +113,9 @@ pub fn parse_choice(text: &str) -> Result<Choice, Status> {
     match choice_type {
         "entry_id" => Ok(Choice::Entry(get_required_value(&kv, "entry_id")?.to_owned())),
         "nixos-current" => Ok(Choice::NixosCurrent),
+        chainload_type if chainload_type.starts_with("chainload_") && chainload_type.len() > "chainload_".len() => {
+            Ok(Choice::Chainload(chainload_type.to_owned()))
+        }
         _ => Err(Status::LOAD_ERROR),
     }
 }
