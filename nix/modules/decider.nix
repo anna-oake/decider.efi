@@ -9,11 +9,10 @@
 let
   cfg = config.boot.loader.decider;
   efi = config.boot.loader.efi;
-  hasLanzabooteOption = options ? boot && options.boot ? lanzaboote;
-  systemdBoot = config.boot.loader."systemd-boot";
+  systemdBootEnabled = config.boot.loader.systemd-boot.enable;
 
-  lanzaboote =
-    if hasLanzabooteOption then
+  lzbtCfg =
+    if options.boot ? lanzaboote then
       config.boot.lanzaboote
     else
       {
@@ -26,18 +25,9 @@ let
         autoEnrollKeys.enable = false;
       };
 
-  systemdBootEnabled = systemdBoot.enable;
-  lanzabooteEnabled = lanzaboote.enable;
-  lanzabooteAllowUnsigned = lanzaboote.allowUnsigned;
-  lanzabootePublicKeyFile = toString lanzaboote.publicKeyFile;
-  lanzabootePrivateKeyFile = toString lanzaboote.privateKeyFile;
-  lanzabooteEfiSysMountPoints = [ efi.efiSysMountPoint ] ++ lanzaboote.extraEfiSysMountPoints;
-
   efiArch = pkgs.stdenv.hostPlatform.efiArch;
   deciderEfiName = "decider${efiArch}.efi";
   fallbackEfiName = "BOOT${lib.toUpper efiArch}.EFI";
-  deciderPackageEfiPath = "${cfg.package}/bin/decider.efi";
-  defaultChainloadPath = "/EFI/systemd/systemd-boot${efiArch}.efi";
 
   deciderConfig = pkgs.writeText "decider.conf" ''
     chainload_path=${cfg.chainloadPath}
@@ -45,108 +35,104 @@ let
     ${lib.optionalString (cfg.choiceSource == "tftp") "tftp_ip=${cfg.tftpIp}"}
   '';
 
-  updateEfiBootEntry = pkgs.writeShellScript "decider-update-efi-boot-entry" ''
-    set -euo pipefail
+  updateEfiBootEntry = pkgs.writeShellApplication {
+    name = "decider-update-efi-boot-entry";
+    runtimeInputs = [
+      pkgs.coreutils
+      pkgs.efibootmgr
+      pkgs.util-linux
+    ];
+    text = ''
+      label='decider.efi'
+      loader_path='/EFI/decider/${deciderEfiName}'
 
-    label='decider.efi'
-    esp_mount=${lib.escapeShellArg efi.efiSysMountPoint}
-    loader_path='/EFI/decider/${deciderEfiName}'
+      part_device="$(readlink -f "$(findmnt -nro SOURCE --target "${efi.efiSysMountPoint}")")"
+      part_name="''${part_device##*/}"
+      part_sysfs="/sys/class/block/$part_name"
 
-    efibootmgr='${lib.getExe pkgs.efibootmgr}'
-    findmnt='${pkgs.util-linux}/bin/findmnt'
-    lsblk='${pkgs.util-linux}/bin/lsblk'
-    readlink='${pkgs.coreutils}/bin/readlink'
-    head='${pkgs.coreutils}/bin/head'
+      part_number="$(cat "$part_sysfs/partition" 2>/dev/null || true)"
+      disk_name="$(basename "$(readlink -f "$part_sysfs/..")" 2>/dev/null || true)"
 
-    part_source="$("$findmnt" -no SOURCE --target "$esp_mount")"
-    part_device="$("$readlink" -f "$part_source")"
-    disk_name="$("$lsblk" -no PKNAME "$part_device" | "$head" -n1)"
-    disk_device="/dev/$disk_name"
-    part_number="''${part_device#"$disk_device"}"
-    part_number="''${part_number#p}"
+      if [ -z "$disk_name" ] || [ -z "$part_number" ]; then
+        echo "decider: failed to resolve ESP disk/partition for ${efi.efiSysMountPoint} ($part_device)" >&2
+        exit 1
+      fi
 
-    "$efibootmgr" -B -L "$label" >/dev/null 2>&1 || true
+      disk_device="/dev/$disk_name"
 
-    "$efibootmgr" \
-      -c \
-      -d "$disk_device" \
-      -p "$part_number" \
-      -l "$loader_path" \
-      -L "$label" >/dev/null
-  '';
+      efibootmgr -B -L "$label" >/dev/null 2>&1 || true
 
-  installDeciderLanzaboote = pkgs.writeShellScript "decider-install-lanzaboote" ''
-    set -euo pipefail
+      efibootmgr \
+        -c \
+        -d "$disk_device" \
+        -p "$part_number" \
+        -l "$loader_path" \
+        -L "$label" >/dev/null
+    '';
+  };
 
-    esp_mount="''${1:?ESP mount point required}"
-    src=${lib.escapeShellArg deciderPackageEfiPath}
-    conf_src=${lib.escapeShellArg deciderConfig}
-    decider_dst="$esp_mount/EFI/decider/${deciderEfiName}"
-    fallback_dst="$esp_mount/EFI/BOOT/${fallbackEfiName}"
+  installDeciderLanzaboote = pkgs.writeShellApplication {
+    name = "decider-install-lanzaboote";
+    runtimeInputs = [
+      pkgs.coreutils
+      pkgs.sbsigntool
+    ];
+    text = ''
+      esp_mount='${efi.efiSysMountPoint}'
+      src='${cfg.package}/bin/decider.efi'
+      conf_src='${deciderConfig}'
+      decider_dst='${efi.efiSysMountPoint}/EFI/decider/${deciderEfiName}'
+      decider_conf_dir='${efi.efiSysMountPoint}/decider'
 
-    allow_unsigned='${lib.boolToString lanzabooteAllowUnsigned}'
-    public_key=${lib.escapeShellArg lanzabootePublicKeyFile}
-    private_key=${lib.escapeShellArg lanzabootePrivateKeyFile}
+      if [ ! -r "$src" ]; then
+        echo "decider: source EFI binary not found: $src" >&2
+        exit 1
+      fi
 
-    install='${pkgs.coreutils}/bin/install'
-    mkdir='${pkgs.coreutils}/bin/mkdir'
-    dirname='${pkgs.coreutils}/bin/dirname'
-    sbsign='${lib.getExe' pkgs.sbsigntool "sbsign"}'
+      echo "decider: installing via lanzaboote to ESP at $esp_mount" >&2
 
-    if [ ! -r "$src" ]; then
-      echo "decider: source EFI binary not found: $src" >&2
-      exit 1
-    fi
+      install_image() {
+        local dst="$1"
+        mkdir -p "$(dirname "$dst")"
 
-    echo "decider: installing via lanzaboote to ESP at $esp_mount" >&2
-
-    install_signed_or_unsigned() {
-      local dst="$1"
-      "$mkdir" -p "$("$dirname" "$dst")"
-
-      if [ "$allow_unsigned" = "true" ]; then
-        if [ -r "$public_key" ] && [ -r "$private_key" ]; then
-          if "$sbsign" --key "$private_key" --cert "$public_key" --output "$dst" "$src" >/dev/null 2>&1; then
-            return 0
-          fi
+        if sbsign \
+          --key '${lzbtCfg.privateKeyFile}' \
+          --cert '${lzbtCfg.publicKeyFile}' \
+          --output "$dst" \
+          "$src" >/dev/null 2>&1; then
+          return 0
         fi
-        "$install" -m 0644 "$src" "$dst"
-        return 0
-      fi
 
-      if [ ! -r "$public_key" ] || [ ! -r "$private_key" ]; then
-        echo "decider: secure boot keys are missing, cannot sign decider.efi (set boot.lanzaboote.allowUnsigned = true to allow unsigned install)" >&2
-        return 1
-      fi
+        ${
+          if lzbtCfg.allowUnsigned then
+            ''
+              install -m 0644 "$src" "$dst"
+            ''
+          else
+            ''
+              echo "decider: failed to sign decider.efi (set boot.lanzaboote.allowUnsigned = true to allow unsigned install)" >&2
+              return 1
+            ''
+        }
+      }
 
-      "$sbsign" --key "$private_key" --cert "$public_key" --output "$dst" "$src" >/dev/null
-    }
+      install_image "$decider_dst"
 
-    install_signed_or_unsigned "$decider_dst"
+      mkdir -p "$decider_conf_dir"
+      install -m 0644 "$conf_src" "$decider_conf_dir/decider.conf"
 
-    if [ ! -e "$decider_dst" ]; then
-      echo "decider: failed to install $decider_dst" >&2
-      exit 1
-    fi
+      ${lib.optionalString cfg.efiInstallAsRemovable ''
+        install_image "${efi.efiSysMountPoint}/EFI/BOOT/${fallbackEfiName}"
+      ''}
 
-    "$mkdir" -p "$esp_mount/decider"
-    "$install" -m 0644 "$conf_src" "$esp_mount/decider/decider.conf"
-
-    if [ ${lib.boolToString cfg.efiInstallAsRemovable} = true ]; then
-      install_signed_or_unsigned "$fallback_dst"
-    fi
-
-    ${lib.optionalString efi.canTouchEfiVariables ''
-      if [ "$esp_mount" = ${lib.escapeShellArg efi.efiSysMountPoint} ]; then
-        ${updateEfiBootEntry}
-      fi
-    ''}
-  '';
+      ${lib.optionalString efi.canTouchEfiVariables (lib.getExe updateEfiBootEntry)}
+    '';
+  };
 
   mkLanzabooteInstallCommand = efiSysMountPoint: ''
-    ${lanzaboote.installCommand} \
-      --public-key ${lanzaboote.publicKeyFile} \
-      --private-key ${lanzaboote.privateKeyFile} \
+    ${lzbtCfg.installCommand} \
+      --public-key ${lzbtCfg.publicKeyFile} \
+      --private-key ${lzbtCfg.privateKeyFile} \
       ${efiSysMountPoint} \
       /nix/var/nix/profiles/system-*-link
   '';
@@ -168,7 +154,7 @@ in
 
     chainloadPath = lib.mkOption {
       type = lib.types.str;
-      default = defaultChainloadPath;
+      default = "/EFI/systemd/systemd-boot${efiArch}.efi";
       defaultText = lib.literalExpression ''"\\EFI\\systemd\\systemd-boot''${pkgs.stdenv.hostPlatform.efiArch}.efi"'';
       description = ''
         UEFI path that decider will chainload after setting LoaderEntryOneShot.
@@ -211,12 +197,16 @@ in
       {
         assertions = [
           {
-            assertion = systemdBootEnabled || lanzabooteEnabled;
+            assertion = systemdBootEnabled || lzbtCfg.enable;
             message = "boot.loader.decider.enable requires either boot.loader.systemd-boot.enable or boot.lanzaboote.enable.";
           }
           {
             assertion = (cfg.choiceSource != "tftp") || (cfg.tftpIp != null);
             message = "boot.loader.decider.tftpIp must be set when boot.loader.decider.choiceSource = \"tftp\".";
+          }
+          {
+            assertion = (!lzbtCfg.enable) || (lzbtCfg.extraEfiSysMountPoints == [ ]);
+            message = "boot.loader.decider with lanzaboote currently supports only the primary EFI system mount; boot.lanzaboote.extraEfiSysMountPoints must be empty.";
           }
         ];
       }
@@ -235,33 +225,24 @@ in
 
       (lib.mkIf (systemdBootEnabled && efi.canTouchEfiVariables) {
         boot.loader.systemd-boot.extraInstallCommands = lib.mkAfter ''
-          ${updateEfiBootEntry}
+          ${lib.getExe updateEfiBootEntry}
         '';
       })
 
-      (
-        if hasLanzabooteOption then
-          lib.mkIf lanzabooteEnabled {
-            boot.loader.external.installHook = lib.mkForce (
-              pkgs.writeShellScript "bootinstall" (
-                lib.concatStringsSep "\n" (
-                  map (efiSysMountPoint: ''
-                    ${mkLanzabooteInstallCommand efiSysMountPoint}
-                    ${installDeciderLanzaboote} ${lib.escapeShellArg efiSysMountPoint}
-                  '') lanzabooteEfiSysMountPoints
-                )
-              )
-            );
+      (lib.mkIf lzbtCfg.enable {
+        boot.loader.external.installHook = lib.mkForce (
+          pkgs.writeShellScript "bootinstall" ''
+            ${mkLanzabooteInstallCommand efi.efiSysMountPoint}
+            ${lib.getExe installDeciderLanzaboote}
+          ''
+        );
 
-            systemd.services.prepare-sb-auto-enroll.script = lib.mkIf lanzaboote.autoEnrollKeys.enable (
-              lib.mkAfter ''
-                ${installDeciderLanzaboote} ${lib.escapeShellArg efi.efiSysMountPoint}
-              ''
-            );
-          }
-        else
-          { }
-      )
+        systemd.services.prepare-sb-auto-enroll.script = lib.mkIf lzbtCfg.autoEnrollKeys.enable (
+          lib.mkAfter ''
+            ${lib.getExe installDeciderLanzaboote}
+          ''
+        );
+      })
     ]
   );
 }
